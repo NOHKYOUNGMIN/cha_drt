@@ -38,7 +38,7 @@ if not shp_files:
 gdfs = []
 for f in shp_files:
     print("불러오는 중:", f)
-    _g = gpd.read_file(f, encoding="euc-kr")
+    _g = gpd.read_file(f, encoding="utf-8")
     _g["source_file"] = Path(f).stem
     gdfs.append(_g)
 
