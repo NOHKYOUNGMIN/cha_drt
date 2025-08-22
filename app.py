@@ -14,125 +14,10 @@ import os
 import datetime
 import glob
 from pathlib import Path
-
-# ────────────────────────────── 
-# ✅ 환경변수 불러오기 (Streamlit Cloud 호환에 저장된 키 사용)
-# ──────────────────────────────
-MAPBOX_TOKEN = "pk.eyJ1IjoiZ3VyMDUxMDgiLCJhIjoiY21lZ2k1Y291MTdoZjJrb2k3bHc3cTJrbSJ9.DElgSQ0rPoRk1eEacPI8uQ"
+import fiona
 
 # ──────────────────────────────
-# ✅ 데이터 로드 (DRT 라인 셰이프 자동 병합)
-# ──────────────────────────────
-patterns = ["./drt_*.shp", "./new_new_drt.shp"]
-shp_files = []
-for p in patterns:
-    shp_files.extend(glob.glob(p))
-shp_files = sorted(set(shp_files))
-
-if not shp_files:
-    st.error("❌ drt_*.shp / new_new_drt.shp 파일을 찾지 못했습니다.")
-    st.stop()
-
-# ──────────────────────────────
-# ✅ 파일별 읽기 + source_file 컬럼 추가 (인코딩 안전 처리)
-# ──────────────────────────────
-gdfs = []
-for f in shp_files:
-    print("불러오는 중:", f)
-    try:
-        _g = gpd.read_file(f)  # .cpg 있으면 UTF-8 자동
-    except UnicodeDecodeError:
-        try:
-            _g = gpd.read_file(f, encoding="euc-kr")
-        except Exception:
-            _g = gpd.read_file(f, encoding="cp949")
-    _g["source_file"] = Path(f).stem
-    gdfs.append(_g)
-
-# ──────────────────────────────
-# ✅ concat으로 병합
-# ──────────────────────────────
-gdf = pd.concat(gdfs, ignore_index=True)
-gdf = gpd.GeoDataFrame(gdf, geometry="geometry", crs=gdfs[0].crs)
-
-# ──────────────────────────────
-# ✅ 좌표계 EPSG:4326으로 맞추기
-# ──────────────────────────────
-if gdf.crs is None or gdf.crs.to_epsg() != 4326:
-    gdf = gdf.to_crs(epsg=4326)
-
-# ──────────────────────────────
-# ✅ 5. name 컬럼 보정
-# ──────────────────────────────
-name_candidates = [c for c in gdf.columns if c.lower() in ["name", "정류장명", "stop_name", "title"]]
-if name_candidates:
-    name_col = name_candidates[0]
-    gdf["name"] = gdf[name_col].astype(str)
-else:
-    obj_cols = [c for c in gdf.columns if c != "geometry" and gdf[c].dtype == "object"]
-    if obj_cols:
-        gdf["name"] = gdf[obj_cols[0]].astype(str)
-    else:
-        gdf["name"] = gdf.apply(lambda r: f"{r.get('source_file','drt')}_{int(r.name)+1}", axis=1)
-
-# ──────────────────────────────
-# ✅ 6. 위도/경도 컬럼 생성
-# ──────────────────────────────
-if gdf.geometry.geom_type.isin(["Point"]).all():
-    gdf["lon"] = gdf.geometry.x
-    gdf["lat"] = gdf.geometry.y
-else:
-    reps = gdf.geometry.representative_point()
-    gdf["lon"] = reps.x
-    gdf["lat"] = reps.y
-
-# ──────────────────────────────
-# ✅ 7. boundary 생성
-# ──────────────────────────────
-boundary_path = Path("./cb_shp.shp")
-if boundary_path.exists():
-    boundary = gpd.read_file(boundary_path, encoding="euc-kr").to_crs(epsg=4326)
-else:
-    try:
-        union = gdf.unary_union
-        hull = union.convex_hull
-        boundary = gpd.GeoDataFrame(geometry=[hull], crs="EPSG:4326")
-    except Exception:
-        boundary = None
-
-
-# ──────────────────────────────
-# ✅ Session 초기화
-# ──────────────────────────────
-DEFAULTS = {
-    "order": [],
-    "segments": [],
-    "duration": 0.0,
-    "distance": 0.0,
-    "messages": [
-        {
-            "role": "system",
-            "content": "당신은 천안시에서 DRT(수요응답형 교통) 최적 노선을 추천해 주는 전문 교통 어시스턴트입니다."
-        }
-    ],
-    "auto_gpt_input": ""
-}
-
-# ──────────────────────────────
-# ✅ 혼잡도 보정 함수 (차량만 영향, 도보=1.0)
-# ──────────────────────────────
-def congestion_factor(time_band: str, mode_text: str) -> float:
-    if "도보" in mode_text:
-        return 1.0
-    table = {
-        "혼잡(출퇴근)": 1.40,
-        "일반":       1.15,
-        "심야/한산":   0.90,
-    }
-    return table.get(time_band, 1.15)
-
-# ──────────────────────────────
-# ✅ 페이지 설정 & 스타일
+# ✅ 페이지 설정
 # ──────────────────────────────
 st.set_page_config(
     page_title="청풍로드 - 충청북도 맞춤형 AI기반 스마트 관광 가이드",
@@ -140,6 +25,15 @@ st.set_page_config(
     initial_sidebar_state="collapsed"
 )
 
+# ────────────────────────────── 
+# ✅ 환경변수 불러오기 (Streamlit Cloud 호환에 저장된 키 사용)
+# ──────────────────────────────
+# 필요 시 secrets 사용: MAPBOX_TOKEN = st.secrets.get("MAPBOX_TOKEN", "...")
+MAPBOX_TOKEN = "pk.eyJ1IjoiZ3VyMDUxMDgiLCJhIjoiY21lZ2k1Y291MTdoZjJrb2k3bHc3cTJrbSJ9.DElgSQ0rPoRk1eEacPI8uQ"
+
+# ──────────────────────────────
+# ✅ 스타일
+# ──────────────────────────────
 st.markdown("""
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@300;400;500;600;700&display=swap');
@@ -162,22 +56,8 @@ header[data-testid="stHeader"] { display: none; }
 .empty-state { text-align: center; padding: 40px 20px; color: #9ca3af; font-style: italic; font-size: 0.95rem; background: linear-gradient(135deg, #ffecd2 0%, #fcb69f 100%); border-radius: 12px; margin: 16px 0; }
 .map-container { width: 100% !important; height: 520px !important; border-radius: 12px !important; overflow: hidden !important; position: relative !important; background: transparent !important; border: 2px solid #e5e7eb !important; margin: 0 !important; padding: 0 !important; box-sizing: border-box !important; }
 div[data-testid="stIFrame"] { width: 100% !important; max-width: 100% !important; height: 520px !important; position: relative !important; overflow: hidden !important; box-sizing: border-box !important; border-radius: 12px !important; background: transparent !important; border: none !important; margin: 0 !important; padding: 0 !important; }
-div[data-testid="stIFrame"] > iframe { width: 100% !important; height: 100% !important; border: none !important; border-radius: 12px !important; max-width: 100% !important; box-sizing: border-box !important; background: transparent !important; margin: 0 !important; padding: 0 !important; }
-div[data-testid="stIFrame"] > iframe > html > body > div:empty { display: none !important; }
-div[data-testid="stIFrame"] div:empty { display: none !important; }
-.folium-map div:empty { display: none !important; }
-.leaflet-container .leaflet-control-container div:empty { display: none !important; }
-.leaflet-container > div:empty { display: none !important; }
-div:empty:not(.leaflet-zoom-box):not(.leaflet-marker-icon):not(.leaflet-div-icon) { display: none !important; }
-div[style*="background: white"]:empty, div[style*="background: #fff"]:empty, div[style*="background: #ffffff"]:empty, div[style*="background-color: white"]:empty, div[style*="background-color: #fff"]:empty, div[style*="background-color: #ffffff"]:empty { display: none !important; }
-.folium-map { width: 100% !important; height: 100% !important; max-width: 100% !important; max-height: 520px !important; box-sizing: border-box !important; background: transparent !important; margin: 0 !important; padding: 0 !important; border: none !important; }
-.leaflet-container { width: 100% !important; height: 100% !important; max-width: 100% !important; max-height: 520px !important; box-sizing: border-box !important; background: transparent !important; margin: 0 !important; padding: 0 !important; border: none !important; }
-.stTextInput > div > div > input, .stSelectbox > div > div > select { border: 2px solid #e5e7eb; border-radius: 8px; padding: 10px 14px; font-size: 0.9rem; transition: all 0.2s ease; background: #fafafa; }
-.stTextInput > div > div > input:focus, .stSelectbox > div > div > select:focus { border-color: #667eea; background: white; box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1); }
+.folium-map, .leaflet-container { width: 100% !important; height: 100% !important; max-height: 520px !important; }
 .block-container { padding-top: 1rem; padding-bottom: 1rem; max-width: 1400px; }
-.stSuccess { background: linear-gradient(135deg, #d4edda 0%, #c3e6cb 100%); border: 1px solid #b8dacd; border-radius: 8px; color: #155724; }
-.stWarning { background: linear-gradient(135deg, #fff3cd 0%, #ffeaa7 100%); border: 1px solid #f8d7da; border-radius: 8px; color: #856404; }
-.stError { background: linear-gradient(135deg, #f8d7da 0%, #f5c6cb 100%); border: 1px solid #f1b0b7; border-radius: 8px; color: #721c24; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -193,6 +73,162 @@ st.markdown('''
 ''', unsafe_allow_html=True)
 
 # ──────────────────────────────
+# ✅ 로버스트 셰이프 로더
+# ──────────────────────────────
+ENCODING_TRY_ORDER = ["utf-8", "euc-kr", "cp949", "latin1"]
+
+@st.cache_data(show_spinner=False)
+def robust_read_shp(file_path: str):
+    tried = []
+    last_err = None
+    # Fiona/GDAL 드라이버 보장
+    fiona.drvsupport.supported_drivers["ESRI Shapefile"] = "raw"
+    # .cpg 힌트가 없을 때도 직접 지정 테스트
+    for enc in ENCODING_TRY_ORDER:
+        try:
+            g = gpd.read_file(file_path, encoding=enc)
+            return g, enc, tried, None
+        except Exception as e:
+            tried.append(enc)
+            last_err = str(e)
+    return None, None, tried, last_err
+
+@st.cache_data(show_spinner=False)
+def load_all_shps(patterns):
+    shp_files = []
+    for p in patterns:
+        shp_files.extend(glob.glob(p))
+    shp_files = sorted(set(shp_files))
+
+    ok_gdfs = []
+    read_logs = []
+    failed = []
+
+    for f in shp_files:
+        g, enc, tried, err = robust_read_shp(f)
+        if g is not None:
+            g["source_file"] = Path(f).stem
+            ok_gdfs.append(g)
+            read_logs.append({"file": f, "encoding": enc, "tried": tried})
+        else:
+            failed.append({"file": f, "tried": tried, "error": err})
+    return shp_files, ok_gdfs, read_logs, failed
+
+# ──────────────────────────────
+# ✅ 데이터 로드 (DRT 라인 셰이프 자동 병합)
+# ──────────────────────────────
+patterns = ["./drt_*.shp", "./new_new_drt.shp"]
+shp_files, gdfs, read_logs, failed_logs = load_all_shps(patterns)
+
+if not shp_files:
+    st.error("❌ drt_*.shp / new_new_drt.shp 파일을 찾지 못했습니다.")
+    st.stop()
+
+with st.expander("📄 셰이프 로딩 로그", expanded=False):
+    if read_logs:
+        st.write("정상 로드:")
+        st.dataframe(pd.DataFrame(read_logs))
+    if failed_logs:
+        st.write("실패 파일:")
+        st.dataframe(pd.DataFrame(failed_logs))
+
+if not gdfs:
+    st.error("❌ 모든 셰이프 파일을 읽는 데 실패했습니다. 인코딩(.cpg) 지정 또는 파일 손상 여부를 확인하세요.")
+    st.stop()
+
+# ──────────────────────────────
+# ✅ concat으로 병합
+# ──────────────────────────────
+gdf = pd.concat(gdfs, ignore_index=True)
+gdf = gpd.GeoDataFrame(gdf, geometry="geometry", crs=gdfs[0].crs if gdfs[0].crs else "EPSG:4326")
+
+# ──────────────────────────────
+# ✅ 좌표계 EPSG:4326으로 맞추기
+# ──────────────────────────────
+try:
+    if gdf.crs is None or gdf.crs.to_epsg() != 4326:
+        gdf = gdf.to_crs(epsg=4326)
+except Exception as e:
+    st.warning(f"CRS 변환 경고: {e}. EPSG:4326으로 강제 지정합니다.")
+    gdf.set_crs(epsg=4326, inplace=True)
+
+# ──────────────────────────────
+# ✅ name 컬럼 보정
+# ──────────────────────────────
+name_candidates = [c for c in gdf.columns if str(c).lower() in ["name", "정류장명", "stop_name", "title"]]
+if name_candidates:
+    name_col = name_candidates[0]
+    gdf["name"] = gdf[name_col].astype(str)
+else:
+    obj_cols = [c for c in gdf.columns if c != "geometry" and gdf[c].dtype == "object"]
+    if obj_cols:
+        gdf["name"] = gdf[obj_cols[0]].astype(str)
+    else:
+        gdf["name"] = gdf.apply(lambda r: f"{r.get('source_file','drt')}_{int(r.name)+1}", axis=1)
+
+# ──────────────────────────────
+# ✅ 위도/경도 컬럼 생성
+# ──────────────────────────────
+try:
+    if gdf.geometry.geom_type.isin(["Point"]).all():
+        gdf["lon"] = gdf.geometry.x
+        gdf["lat"] = gdf.geometry.y
+    else:
+        reps = gdf.geometry.representative_point()
+        gdf["lon"] = reps.x
+        gdf["lat"] = reps.y
+except Exception as e:
+    st.error(f"좌표 추출 실패: {e}")
+    st.stop()
+
+# ──────────────────────────────
+# ✅ 경계(boundary) 생성
+# ──────────────────────────────
+boundary_path = Path("./cb_shp.shp")
+if boundary_path.exists():
+    try:
+        boundary = gpd.read_file(boundary_path, encoding="euc-kr").to_crs(epsg=4326)
+    except Exception:
+        boundary = gpd.read_file(boundary_path).to_crs(epsg=4326)
+else:
+    try:
+        union = gdf.unary_union
+        hull = union.convex_hull
+        boundary = gpd.GeoDataFrame(geometry=[hull], crs="EPSG:4326")
+    except Exception:
+        boundary = None
+
+# ──────────────────────────────
+# ✅ Session 초기화
+# ──────────────────────────────
+DEFAULTS = {
+    "order": [],
+    "segments": [],
+    "duration": 0.0,
+    "distance": 0.0,
+    "messages": [
+        {"role": "system", "content": "당신은 천안시에서 DRT(수요응답형 교통) 최적 노선을 추천해 주는 전문 교통 어시스턴트입니다."}
+    ],
+    "auto_gpt_input": ""
+}
+
+for k, v in DEFAULTS.items():
+    st.session_state.setdefault(k, v)
+
+# ──────────────────────────────
+# ✅ 혼잡도 보정 함수 (차량만 영향, 도보=1.0)
+# ──────────────────────────────
+def congestion_factor(time_band: str, mode_text: str) -> float:
+    if "도보" in mode_text:
+        return 1.0
+    table = {
+        "혼잡(출퇴근)": 1.40,
+        "일반":       1.15,
+        "심야/한산":   0.90,
+    }
+    return table.get(time_band, 1.15)
+
+# ──────────────────────────────
 # ✅ 메인 레이아웃 (3컬럼)
 # ──────────────────────────────
 col1, col2, col3 = st.columns([1.5, 1.2, 3], gap="large")
@@ -204,7 +240,6 @@ with col1:
     st.markdown('<div class="section-header">🚐 DRT 노선 추천 설정</div>', unsafe_allow_html=True)
     st.caption("출발/경유 정류장을 선택하고 노선을 추천받으세요.")
 
-    # 운행 모드
     st.markdown("**운행 모드**")
     mode = st.radio(
         "", 
@@ -214,7 +249,6 @@ with col1:
         label_visibility="collapsed"
     )
 
-    # 출발 시각 & 시간대  ←★ 추가
     st.markdown("**출발 시각 & 시간대**")
     dep_time = st.time_input(
         "",
@@ -232,7 +266,6 @@ with col1:
         help="시간대별 혼잡도를 반영해 소요시간을 보정합니다. (차량만 적용)"
     )
 
-    # 출발 정류장
     st.markdown("**출발 정류장**")
     names_list = gdf["name"].dropna().astype(str).unique().tolist()
     start = st.selectbox(
@@ -243,7 +276,6 @@ with col1:
         help="DRT 운행을 시작할 정류장을 선택하세요."
     )
 
-    # 경유 정류장
     st.markdown("**경유 정류장 (선택)**")
     wps = st.multiselect(
         "",
@@ -253,7 +285,6 @@ with col1:
         help="중간에 들를 정류장을 선택하세요. (복수 선택 가능)"
     )
 
-    # 버튼
     col_btn1, col_btn2 = st.columns(2, gap="small")
     with col_btn1:
         create_clicked = st.button("노선 추천")
@@ -300,7 +331,6 @@ with col2:
     else:
         st.markdown('<div class="empty-state">경로 생성 후 표시됩니다<br>🗺️</div>', unsafe_allow_html=True)
 
-    # ★★★ ETA(도착 예정 시각) 표: 방문 순서 아래 고정 표시 (여기에 넣는 게 포인트)
     if st.session_state.get("segments") and st.session_state.get("leg_durations"):
         try:
             start_dt = datetime.datetime.combine(
@@ -335,17 +365,19 @@ with col2:
 with col3:
     st.markdown('<div class="section-header">🗺️ 추천경로 지도시각화</div>', unsafe_allow_html=True)
 
-    # 지도 중심
     try:
-        ctr = boundary.geometry.centroid
-        clat, clon = float(ctr.y.mean()), float(ctr.x.mean())
+        ctr = boundary.geometry.centroid if boundary is not None else None
+        if ctr is not None:
+            clat, clon = float(ctr.y.mean()), float(ctr.x.mean())
+        else:
+            clat, clon = float(gdf["lat"].mean()), float(gdf["lon"].mean())
         if math.isnan(clat) or math.isnan(clon):
             clat, clon = 36.64, 127.48
     except Exception as e:
         st.warning(f"중심점 계산 오류: {str(e)}")
         clat, clon = 36.64, 127.48
 
-    @st.cache_data
+    @st.cache_data(show_spinner=False)
     def load_graph(lat, lon):
         try:
             return ox.graph_from_point((lat, lon), dist=3000, network_type="all")
@@ -364,11 +396,12 @@ with col3:
         except Exception as e:
             st.warning(f"엣지 변환 실패: {str(e)}")
 
-    # 스냅 포인트 생성
-    stops = [start] + wps
+    stops = [st.session_state.get("start_key", "")] + st.session_state.get("wps_key", [])
     snapped = []
     try:
         for nm in stops:
+            if not nm:
+                continue
             matching_rows = gdf[gdf["name"] == nm]
             if matching_rows.empty:
                 st.warning(f"⚠️ '{nm}' 정보를 찾을 수 없습니다.")
@@ -383,12 +416,18 @@ with col3:
                 snapped.append((r.lon, r.lat))
                 continue
 
-            edges["d"] = edges.geometry.distance(pt)
-            if edges["d"].empty:
+            # 거리계산 시 CRS 차이 방지 위해 동일 좌표계로 처리
+            try:
+                edges_tmp = edges.to_crs(epsg=4326)
+            except Exception:
+                edges_tmp = edges
+
+            edges_tmp["d"] = edges_tmp.geometry.distance(pt)
+            if edges_tmp["d"].empty or edges_tmp["d"].isna().all():
                 snapped.append((r.lon, r.lat))
                 continue
 
-            ln = edges.loc[edges["d"].idxmin()]
+            ln = edges_tmp.loc[edges_tmp["d"].idxmin()]
             sp = ln.geometry.interpolate(ln.geometry.project(pt))
             snapped.append((sp.x, sp.y))
     except Exception as e:
@@ -403,8 +442,11 @@ with col3:
                 st.warning(f"⚠️ '{nm}' 좌표를 가져올 수 없습니다: {str(coord_error)}")
 
     # ───────────────────────────
-    # ✅ 경로 생성 처리 (개선본)
+    # ✅ 경로 생성 처리
     # ───────────────────────────
+    if st.session_state.get("mode_key") is None:
+        st.session_state["mode_key"] = "차량(운행)"
+
     if create_clicked and len(snapped) >= 2:
         try:
             segs, total_sec, total_meter = [], 0.0, 0.0
@@ -461,7 +503,6 @@ with col3:
                     f"약 {st.session_state['duration']:.1f} 분 (시간대 보정계수 x{cong:.2f})"
                 )
 
-                # 경로 생성 직후 1회 ETA 바로 표시 (추가로 중앙 패널에서도 표가 보임)
                 try:
                     start_dt = datetime.datetime.combine(
                         datetime.date.today(),
