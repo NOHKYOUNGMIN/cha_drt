@@ -1,3 +1,4 @@
+# app.py
 import streamlit as st
 import geopandas as gpd
 import pandas as pd
@@ -47,7 +48,7 @@ st.markdown('''
 # ── 토큰/드라이버 힌트 ───────────────────────────────────────────────────────────
 MAPBOX_TOKEN = "pk.eyJ1IjoiZ3VyMDUxMDgiLCJhIjoiY21lZ2k1Y291MTdoZjJrb2k3bHc3cTJrbSJ9.DElgSQ0rPoRk1eEacPI8uQ"
 fiona.drvsupport.supported_drivers["ESRI Shapefile"] = "raw"
-os.environ.setdefault("SHAPE_ENCODING", "CP949")  # GDAL이 기본 인코딩을 유추할 때 힌트
+os.environ.setdefault("SHAPE_ENCODING", "CP949")  # GDAL 힌트
 
 # ── 셰이프 로딩(함수 없이, 강제 .cpg 교정 포함) ───────────────────────────────────
 patterns = ["./drt_*.shp", "./new_new_drt.shp"]
@@ -63,7 +64,8 @@ if not shp_files:
 gdfs = []
 read_logs = []
 failed_logs = []
-ENCODING_TRY_ORDER = ["utf-8", "euc-kr", "cp949", "latin1"]
+# UTF-8 시도 제거. CP949/EUC-KR만 우선, 최후에 latin1
+ENCODING_TRY_ORDER = ["cp949", "euc-kr", "latin1"]
 
 tmp_dir = Path(tempfile.mkdtemp(prefix="cpg_fix_"))
 
@@ -74,7 +76,7 @@ for f in shp_files:
     enc_used = None
     last_err = None
 
-    # 1) 일반 시도(utf-8 → euc-kr → cp949 → latin1)
+    # 1) 일반 시도(CP949 → EUC-KR → latin1)
     for enc in ENCODING_TRY_ORDER:
         try:
             _g = gpd.read_file(str(f), encoding=enc)
@@ -97,7 +99,6 @@ for f in shp_files:
             (target_dir / (base.name + ".cpg")).write_text("CP949", encoding="ascii")
 
             shp_tmp = target_dir / f.name  # 임시 위치의 shp 경로
-            # 다시 인코딩 시도
             for enc in ["cp949", "euc-kr", "latin1"]:
                 try:
                     _g = gpd.read_file(str(shp_tmp), encoding=enc)
@@ -171,7 +172,7 @@ else:
 boundary_path = Path("./cb_shp.shp")
 if boundary_path.exists():
     try:
-        boundary = gpd.read_file(boundary_path, encoding="euc-kr").to_crs(epsg=4326)
+        boundary = gpd.read_file(boundary_path, encoding="cp949").to_crs(epsg=4326)
     except Exception:
         boundary = gpd.read_file(boundary_path).to_crs(epsg=4326)
 else:
@@ -291,9 +292,16 @@ with col3:
             try: edges_tmp = edges.to_crs(epsg=4326)
             except Exception: edges_tmp = edges
 
-            edges_tmp["d"] = edges_tmp.geometry.distance(pt)
+            # shapely >=2.0 거리 계산 안전 처리
+            try:
+                edges_tmp["d"] = edges_tmp.geometry.distance(pt)
+            except Exception:
+                # 좌표계 불일치나 GEOS 이슈시 원점 좌표 사용
+                snapped.append((r.lon, r.lat)); continue
+
             if edges_tmp["d"].empty or edges_tmp["d"].isna().all():
                 snapped.append((r.lon, r.lat)); continue
+
             ln = edges_tmp.loc[edges_tmp["d"].idxmin()]
             sp = ln.geometry.interpolate(ln.geometry.project(pt))
             snapped.append((sp.x, sp.y))
@@ -310,9 +318,8 @@ with col3:
     if "mode_key" not in st.session_state: st.session_state["mode_key"] = "차량(운행)"
 
     if st.button("노선 추천 실행", key="run_hidden", help="상단 버튼과 동일", disabled=True):
-        pass  # 자리표시자(기능 변경 없음)
+        pass
 
-    # 상단의 create_clicked 버튼 사용
     if create_clicked and len(snapped) >= 2:
         try:
             segs, total_sec, total_meter = [], 0.0, 0.0
@@ -390,8 +397,6 @@ with col3:
                               icon=folium.Icon(color="gray")).add_to(mc)
 
         current_order = st.session_state.get("order", [st.session_state.get("start_key", "")] + st.session_state.get("wps_key", []))
-        # 스냅 마커
-        # (위에서 만든 snapped 사용)
         for idx, (x, y) in enumerate(snapped, 1):
             place_name = current_order[idx - 1] if idx <= len(current_order) else f"지점 {idx}"
             folium.Marker([y, x], icon=folium.Icon(color="red", icon="flag"),
