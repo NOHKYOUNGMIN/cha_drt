@@ -23,9 +23,6 @@ MAPBOX_TOKEN = "pk.eyJ1IjoiZ3VyMDUxMDgiLCJhIjoiY21lZ2k1Y291MTdoZjJrb2k3bHc3cTJrb
 # ──────────────────────────────
 # ✅ 데이터 로드 (DRT 라인 셰이프 자동 병합)
 # ──────────────────────────────
-# ──────────────────────────────
-# ✅ 1. 대상 shp 파일 탐색
-# ──────────────────────────────
 patterns = ["./drt_*.shp", "./new_new_drt.shp"]
 shp_files = []
 for p in patterns:
@@ -33,26 +30,33 @@ for p in patterns:
 shp_files = sorted(set(shp_files))
 
 if not shp_files:
-    raise FileNotFoundError("❌ drt_*.shp / new_new_drt.shp 파일을 찾지 못했습니다.")
+    st.error("❌ drt_*.shp / new_new_drt.shp 파일을 찾지 못했습니다.")
+    st.stop()
 
 # ──────────────────────────────
-# ✅ 2. 파일별 읽기 + source_file 컬럼 추가
+# ✅ 파일별 읽기 + source_file 컬럼 추가 (인코딩 안전 처리)
 # ──────────────────────────────
 gdfs = []
 for f in shp_files:
     print("불러오는 중:", f)
-    _g = gpd.read_file(f, encoding="euc-kr")
+    try:
+        _g = gpd.read_file(f)  # .cpg 있으면 UTF-8 자동
+    except UnicodeDecodeError:
+        try:
+            _g = gpd.read_file(f, encoding="euc-kr")
+        except Exception:
+            _g = gpd.read_file(f, encoding="cp949")
     _g["source_file"] = Path(f).stem
     gdfs.append(_g)
 
 # ──────────────────────────────
-# ✅ 3. concat으로 병합
+# ✅ concat으로 병합
 # ──────────────────────────────
 gdf = pd.concat(gdfs, ignore_index=True)
 gdf = gpd.GeoDataFrame(gdf, geometry="geometry", crs=gdfs[0].crs)
 
 # ──────────────────────────────
-# ✅ 4. 좌표계 EPSG:4326으로 맞추기
+# ✅ 좌표계 EPSG:4326으로 맞추기
 # ──────────────────────────────
 if gdf.crs is None or gdf.crs.to_epsg() != 4326:
     gdf = gdf.to_crs(epsg=4326)
