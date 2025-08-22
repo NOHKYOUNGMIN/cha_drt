@@ -27,14 +27,14 @@ def load_data():
     from pathlib import Path
     try:
         # 1) 대상 shp 자동 탐색 (작업 폴더 기준)
-        patterns = ["./drt_*.shp", "./new_drt.shp"]
+        patterns = ["./drt_*.shp", "./new_new_drt.shp"]
         shp_files = []
         for p in patterns:
             shp_files.extend(glob.glob(p))
         shp_files = sorted(set(shp_files))
 
         if not shp_files:
-            raise FileNotFoundError("drt_*.shp / new_drt.shp 를 찾지 못했습니다.")
+            raise FileNotFoundError("drt_*.shp / new_new_drt.shp 를 찾지 못했습니다.")
 
         # 2) 모두 읽어서 하나로 병합
         gdfs = []
