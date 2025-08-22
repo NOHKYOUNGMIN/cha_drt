@@ -8,8 +8,6 @@ streamlit-folium
 openai
 geopy
 pandas
-python-dotenv 
+python-dotenv
 numpy
-scikit-learn>=1.3 
-glob
-Path
+scikit-learn
