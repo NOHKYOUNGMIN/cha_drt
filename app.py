@@ -26,7 +26,7 @@ MAPBOX_TOKEN = "pk.eyJ1IjoiZ3VyMDUxMDgiLCJhIjoiY21lZ2k1Y291MTdoZjJrb2k3bHc3cTJrb
 # ──────────────────────────────
 # ✅ 1. 대상 shp 파일 탐색
 # ──────────────────────────────
-patterns = ["./drt_*.shp", "./new_new_drt.shp"]
+patterns = ["./drt_*.shp", "./new_drt.shp"]
 shp_files = []
 for p in patterns:
     shp_files.extend(glob.glob(p))
