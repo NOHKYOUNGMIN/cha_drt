@@ -226,7 +226,7 @@ with col1:
 
     # 출발 정류장
     st.markdown("**출발 정류장**")
-    names_list = gdf["juso"].dropna().astype(str).unique().tolist()
+    names_list = gdf["jibun"].dropna().astype(str).unique().tolist()
     start = st.selectbox(
         "",
         names_list,
