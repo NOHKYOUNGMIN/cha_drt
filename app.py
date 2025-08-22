@@ -1,6 +1,7 @@
 import streamlit as st
 import geopandas as gpd
 import pandas as pd
+import numpy as np
 import folium
 from folium.plugins import MarkerCluster
 from folium.features import DivIcon
@@ -10,6 +11,8 @@ import requests
 from streamlit_folium import st_folium
 import math
 import os
+import datetime
+
 
 
 # ────────────────────────────── 
@@ -503,6 +506,121 @@ with col1:
         create_clicked = st.button("노선 추천")   # ← '경로 생성' → '노선 추천'
     with col_btn2:
         clear_clicked = st.button("초기화")
+
+if create_clicked and len(snapped) >= 2:
+    try:
+        # 시간대 보정계수 (차량만 영향)
+        cong = congestion_factor(st.session_state.get("time_band", "일반"),
+                                 st.session_state.get("mode_key", "차량(운행)"))
+
+        # 출발 datetime (오늘 날짜 + 사용자가 고른 시각)
+        start_dt = datetime.datetime.combine(datetime.date.today(), st.session_state.get("dep_time", datetime.time(9, 0)))
+
+        leg_geoms = []       # 각 구간의 폴리라인 (lon,lat 또는 [lon,lat] 리스트)
+        leg_duration_min = []  # 각 구간의 소요시간(분)
+        total_distance_km = 0.0
+
+        if G_NET and G_NET.number_of_edges() > 0:
+            # ── 노선망 기준(네트워크) 경로
+            # 기본 속도 (차량/도보)
+            base_speed = 4.5 if "도보" in st.session_state.get("mode_key", "") else 25.0
+            eff_speed = base_speed / cong  # 혼잡 시 속도 저하
+
+            for i in range(len(snapped) - 1):
+                lon1, lat1 = snapped[i]
+                lon2, lat2 = snapped[i + 1]
+
+                u = nearest_node(G_NET, lon1, lat1)
+                v = nearest_node(G_NET, lon2, lat2)
+                path_nodes = nx.shortest_path(G_NET, u, v, weight="weight")
+
+                # 선분 좌표 [[lon,lat], ...]
+                seg_ll = path_to_polyline_lonlat(G_NET, path_nodes)
+                leg_geoms.append(seg_ll)
+
+                # 거리 합계 + 구간 시간
+                seg_m = 0.0
+                for uu, vv in zip(path_nodes[:-1], path_nodes[1:]):
+                    data = G_NET.get_edge_data(uu, vv)
+                    if data:
+                        seg_m += float(data.get("length_m", 0.0))
+
+                total_distance_km += seg_m / 1000.0
+                leg_duration_min.append((seg_m / 1000.0) / max(eff_speed, 0.1) * 60.0)
+
+            total_duration_min = sum(leg_duration_min)
+
+        else:
+            # ── 폴백: Mapbox Directions (혼잡은 duration에 계수 곱)
+            api_mode = "walking" if "도보" in st.session_state.get("mode_key", "") else "driving"
+            total_duration_min = 0.0
+
+            for i in range(len(snapped) - 1):
+                x1, y1 = snapped[i]
+                x2, y2 = snapped[i + 1]
+                coord = f"{x1},{y1};{x2},{y2}"
+
+                url = f"https://api.mapbox.com/directions/v5/mapbox/{api_mode}/{coord}"
+                params = {"geometries": "geojson", "overview": "full", "access_token": MAPBOX_TOKEN}
+
+                try:
+                    r = requests.get(url, params=params, timeout=10)
+                    if r.status_code == 200:
+                        data_resp = r.json()
+                        if data_resp.get("routes"):
+                            route = data_resp["routes"][0]
+                            coords = route["geometry"]["coordinates"]  # [[lon,lat], ...]
+                            base_sec = route.get("duration", 0.0)      # 초
+                            dist_m  = route.get("distance", 0.0)
+
+                            # 혼잡 보정(차량만 적용) → 초 * cong
+                            sec = base_sec * (cong if "walking" not in api_mode else 1.0)
+
+                            leg_geoms.append(coords)
+                            leg_duration_min.append(sec / 60.0)
+                            total_duration_min += sec / 60.0
+                            total_distance_km += (dist_m / 1000.0)
+                        else:
+                            st.warning(f"⚠️ 구간 {i+1} 경로 없음")
+                    else:
+                        st.warning(f"⚠️ Directions API 실패 코드 {r.status_code}")
+                except requests.exceptions.Timeout:
+                    st.warning("⚠️ Directions API 타임아웃")
+                except Exception as api_error:
+                    st.warning(f"⚠️ Directions API 오류: {api_error}")
+
+        # ── 세션 업데이트
+        st.session_state["order"] = [*([start] + wps)]
+        st.session_state["segments"] = leg_geoms
+        st.session_state["distance"] = total_distance_km
+        st.session_state["duration"] = total_duration_min
+
+        # ✅ 구간별 도착 예정 시간표 계산
+        times = [start_dt]
+        for dmin in leg_duration_min:
+            times.append(times[-1] + datetime.timedelta(minutes=float(dmin)))
+
+        # stops 라벨 (마지막 도착 포함)
+        stop_labels = [start] + wps
+        if len(stop_labels) < len(times):  # 마지막 목적지 라벨 보강
+            stop_labels = stop_labels + [f"목적지 {len(times)-len(stop_labels)}"]
+        stop_labels = stop_labels[:len(times)]
+
+        sched_df = pd.DataFrame({
+            "정류장": stop_labels,
+            "도착 예정 시각": [t.strftime("%H:%M") for t in times]
+        })
+
+        st.success(f"✅ 경로 생성 완료 · 총 {total_distance_km:.2f} km · 약 {total_duration_min:.1f} 분 "
+                   f"(시간대 보정계수 x{cong:.2f})")
+        st.dataframe(sched_df, use_container_width=True)
+
+        st.rerun()
+
+    except nx.NetworkXNoPath:
+        st.error("경로가 없습니다. 노선 데이터가 끊겨 있거나 교차점이 연결되지 않았을 수 있어요.")
+    except Exception as e:
+        st.error(f"❌ 경로 생성 중 오류: {str(e)}")
 
 
 # ------------------------------
