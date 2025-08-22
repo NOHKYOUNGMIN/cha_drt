@@ -21,83 +21,79 @@ MAPBOX_TOKEN = "pk.eyJ1IjoiZ3VyMDUxMDgiLCJhIjoiY21lZ2k1Y291MTdoZjJrb2k3bHc3cTJrb
 # ──────────────────────────────
 # ✅ 데이터 로드 (DRT 라인 셰이프 자동 병합)
 # ──────────────────────────────
-@st.cache_data
-def load_data():
-    import glob
-    from pathlib import Path
+# ──────────────────────────────
+# ✅ 1. 대상 shp 파일 탐색
+# ──────────────────────────────
+patterns = ["./drt_*.shp", "./new_new_drt.shp"]
+shp_files = []
+for p in patterns:
+    shp_files.extend(glob.glob(p))
+shp_files = sorted(set(shp_files))
+
+if not shp_files:
+    raise FileNotFoundError("❌ drt_*.shp / new_new_drt.shp 파일을 찾지 못했습니다.")
+
+# ──────────────────────────────
+# ✅ 2. 파일별 읽기 + source_file 컬럼 추가
+# ──────────────────────────────
+gdfs = []
+for f in shp_files:
+    print("불러오는 중:", f)
+    _g = gpd.read_file(f, encoding="euc-kr")
+    _g["source_file"] = Path(f).stem
+    gdfs.append(_g)
+
+# ──────────────────────────────
+# ✅ 3. concat으로 병합
+# ──────────────────────────────
+gdf = pd.concat(gdfs, ignore_index=True)
+gdf = gpd.GeoDataFrame(gdf, geometry="geometry", crs=gdfs[0].crs)
+
+# ──────────────────────────────
+# ✅ 4. 좌표계 EPSG:4326으로 맞추기
+# ──────────────────────────────
+if gdf.crs is None or gdf.crs.to_epsg() != 4326:
+    gdf = gdf.to_crs(epsg=4326)
+
+# ──────────────────────────────
+# ✅ 5. name 컬럼 보정
+# ──────────────────────────────
+name_candidates = [c for c in gdf.columns if c.lower() in ["name", "정류장명", "stop_name", "title"]]
+if name_candidates:
+    name_col = name_candidates[0]
+    gdf["name"] = gdf[name_col].astype(str)
+else:
+    obj_cols = [c for c in gdf.columns if c != "geometry" and gdf[c].dtype == "object"]
+    if obj_cols:
+        gdf["name"] = gdf[obj_cols[0]].astype(str)
+    else:
+        gdf["name"] = gdf.apply(lambda r: f"{r.get('source_file','drt')}_{int(r.name)+1}", axis=1)
+
+# ──────────────────────────────
+# ✅ 6. 위도/경도 컬럼 생성
+# ──────────────────────────────
+if gdf.geometry.geom_type.isin(["Point"]).all():
+    gdf["lon"] = gdf.geometry.x
+    gdf["lat"] = gdf.geometry.y
+else:
+    reps = gdf.geometry.representative_point()
+    gdf["lon"] = reps.x
+    gdf["lat"] = reps.y
+
+# ──────────────────────────────
+# ✅ 7. boundary 생성
+# ──────────────────────────────
+boundary_path = Path("./cb_shp.shp")
+if boundary_path.exists():
+    boundary = gpd.read_file(boundary_path, encoding="euc-kr").to_crs(epsg=4326)
+else:
     try:
-        # 1) 대상 shp 자동 탐색 (작업 폴더 기준)
-        patterns = ["./drt_*.shp", "./new_new_drt.shp"]
-        shp_files = []
-        for p in patterns:
-            shp_files.extend(glob.glob(p))
-        shp_files = sorted(set(shp_files))
+        union = gdf.unary_union
+        hull = union.convex_hull
+        boundary = gpd.GeoDataFrame(geometry=[hull], crs="EPSG:4326")
+    except Exception:
+        boundary = None
 
-        if not shp_files:
-            raise FileNotFoundError("drt_*.shp / new_new_drt.shp 를 찾지 못했습니다.")
-
-        # 2) 모두 읽어서 하나로 병합
-        gdfs = []
-        for f in shp_files:
-            _g = gpd.read_file(f)
-            _g["source_file"] = Path(f).stem
-            gdfs.append(_g)
-
-        gdf = pd.concat(gdfs, ignore_index=True)
-        gdf = gpd.GeoDataFrame(gdf, geometry="geometry", crs=gdfs[0].crs)
-
-        # 3) 좌표계 통일 → EPSG:4326
-        if gdf.crs is None or gdf.crs.to_epsg() != 4326:
-            gdf = gdf.to_crs(epsg=4326)
-
-        # 4) name 컬럼 보정(없으면 생성)
-        name_candidates = [c for c in gdf.columns if c.lower() in ["name", "정류장명", "stop_name", "title"]]
-        if name_candidates:
-            name_col = name_candidates[0]
-            gdf["name"] = gdf[name_col].astype(str)
-        else:
-            obj_cols = [c for c in gdf.columns if c != "geometry" and gdf[c].dtype == "object"]
-            if obj_cols:
-                gdf["name"] = gdf[obj_cols[0]].astype(str)
-            else:
-                gdf["name"] = gdf.apply(
-                    lambda r: f"{r.get('source_file','drt')}_{int(r.name)+1}", axis=1
-                )
-
-        # 5) lon/lat 생성
-        if gdf.geometry.geom_type.isin(["Point"]).all():
-            gdf["lon"] = gdf.geometry.x
-            gdf["lat"] = gdf.geometry.y
-        else:
-            reps = gdf.geometry.representative_point()
-            gdf["lon"] = reps.x
-            gdf["lat"] = reps.y
-
-        # 6) boundary 생성
-        from pathlib import Path
-        boundary_path = Path("./cb_shp.shp")
-        if boundary_path.exists():
-            boundary = gpd.read_file(boundary_path).to_crs(epsg=4326)
-        else:
-            try:
-                union = gdf.unary_union
-                hull = union.convex_hull
-                boundary = gpd.GeoDataFrame(geometry=[hull], crs="EPSG:4326")
-            except Exception:
-                boundary = None
-
-        return gdf, boundary
-
-    except Exception as e:
-        st.error(f"❌ 데이터 로드 실패: {str(e)}")
-        return None, None
-
-# ↓ 그대로 유지
-gdf, boundary = load_data()
-
-# 데이터 로드 실패 시 앱 중단
-if gdf is None:
-    st.stop()
 
 # ──────────────────────────────
 # ✅ Session 초기화
