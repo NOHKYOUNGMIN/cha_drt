@@ -21,9 +21,6 @@ from pathlib import Path
 MAPBOX_TOKEN = "pk.eyJ1IjoiZ3VyMDUxMDgiLCJhIjoiY21lZ2k1Y291MTdoZjJrb2k3bHc3cTJrbSJ9.DElgSQ0rPoRk1eEacPI8uQ"
 
 # ──────────────────────────────
-# ✅ 데이터 로드 (DRT 라인 셰이프 자동 병합)
-# ──────────────────────────────
-# ──────────────────────────────
 # ✅ 1. 대상 shp 파일 탐색
 # ──────────────────────────────
 patterns = ["./drt_*.shp", "./new_drt.shp"]
