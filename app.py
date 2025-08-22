@@ -51,7 +51,7 @@ fiona.drvsupport.supported_drivers["ESRI Shapefile"] = "raw"
 os.environ.setdefault("SHAPE_ENCODING", "CP949")  # GDAL 힌트
 
 # ── 셰이프 로딩(함수 없이, 강제 .cpg 교정 포함) ───────────────────────────────────
-patterns = ["./drt_*.shp", "./new_new_drt.shp"]
+patterns = ["./drt_*.shp", "./new_drt.shp"]
 shp_files = []
 for p in patterns:
     shp_files.extend(glob.glob(p))
