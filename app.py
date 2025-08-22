@@ -17,23 +17,13 @@ from pathlib import Path
 import fiona
 
 # ──────────────────────────────
-# ✅ 페이지 설정
+# 페이지/스타일
 # ──────────────────────────────
 st.set_page_config(
     page_title="청풍로드 - 충청북도 맞춤형 AI기반 스마트 관광 가이드",
     layout="wide",
     initial_sidebar_state="collapsed"
 )
-
-# ────────────────────────────── 
-# ✅ 환경변수 불러오기 (Streamlit Cloud 호환에 저장된 키 사용)
-# ──────────────────────────────
-# 필요 시 secrets 사용: MAPBOX_TOKEN = st.secrets.get("MAPBOX_TOKEN", "...")
-MAPBOX_TOKEN = "pk.eyJ1IjoiZ3VyMDUxMDgiLCJhIjoiY21lZ2k1Y291MTdoZjJrb2k3bHc3cTJrbSJ9.DElgSQ0rPoRk1eEacPI8uQ"
-
-# ──────────────────────────────
-# ✅ 스타일
-# ──────────────────────────────
 st.markdown("""
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@300;400;500;600;700&display=swap');
@@ -52,18 +42,13 @@ header[data-testid="stHeader"] { display: none; }
 .visit-order-item:hover { transform: translateX(4px); box-shadow: 0 4px 8px rgba(102, 126, 234, 0.4); }
 .visit-number { background: rgba(255,255,255,0.9); color: #667eea; width: 28px; height: 28px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 0.8rem; font-weight: 700; margin-right: 12px; flex-shrink: 0; }
 .stMetric { background: linear-gradient(135deg, #a8edea 0%, #fed6e3 100%); border: none; border-radius: 12px; padding: 16px 10px; text-align: center; transition: all 0.2s ease; box-shadow: 0 2px 4px rgba(168, 237, 234, 0.3); }
-.stMetric:hover { transform: translateY(-2px); box-shadow: 0 4px 8px rgba(168, 237, 234, 0.4); }
 .empty-state { text-align: center; padding: 40px 20px; color: #9ca3af; font-style: italic; font-size: 0.95rem; background: linear-gradient(135deg, #ffecd2 0%, #fcb69f 100%); border-radius: 12px; margin: 16px 0; }
 .map-container { width: 100% !important; height: 520px !important; border-radius: 12px !important; overflow: hidden !important; position: relative !important; background: transparent !important; border: 2px solid #e5e7eb !important; margin: 0 !important; padding: 0 !important; box-sizing: border-box !important; }
-div[data-testid="stIFrame"] { width: 100% !important; max-width: 100% !important; height: 520px !important; position: relative !important; overflow: hidden !important; box-sizing: border-box !important; border-radius: 12px !important; background: transparent !important; border: none !important; margin: 0 !important; padding: 0 !important; }
-.folium-map, .leaflet-container { width: 100% !important; height: 100% !important; max-height: 520px !important; }
+div[data-testid="stIFrame"], .folium-map, .leaflet-container { width: 100% !important; height: 520px !important; max-height: 520px !important; }
 .block-container { padding-top: 1rem; padding-bottom: 1rem; max-width: 1400px; }
 </style>
 """, unsafe_allow_html=True)
 
-# ──────────────────────────────
-# ✅ 헤더
-# ──────────────────────────────
 st.markdown('''
 <div class="header-container">
     <img src="https://raw.githubusercontent.com/JeongWon4034/cheongju/main/cheongpung_logo.png" alt='청풍로드 로고' style ="width:125px; height:125px">
@@ -73,56 +58,50 @@ st.markdown('''
 ''', unsafe_allow_html=True)
 
 # ──────────────────────────────
-# ✅ 로버스트 셰이프 로더
+# 환경변수/토큰
 # ──────────────────────────────
-ENCODING_TRY_ORDER = ["utf-8", "euc-kr", "cp949", "latin1"]
-
-@st.cache_data(show_spinner=False)
-def robust_read_shp(file_path: str):
-    tried = []
-    last_err = None
-    # Fiona/GDAL 드라이버 보장
-    fiona.drvsupport.supported_drivers["ESRI Shapefile"] = "raw"
-    # .cpg 힌트가 없을 때도 직접 지정 테스트
-    for enc in ENCODING_TRY_ORDER:
-        try:
-            g = gpd.read_file(file_path, encoding=enc)
-            return g, enc, tried, None
-        except Exception as e:
-            tried.append(enc)
-            last_err = str(e)
-    return None, None, tried, last_err
-
-@st.cache_data(show_spinner=False)
-def load_all_shps(patterns):
-    shp_files = []
-    for p in patterns:
-        shp_files.extend(glob.glob(p))
-    shp_files = sorted(set(shp_files))
-
-    ok_gdfs = []
-    read_logs = []
-    failed = []
-
-    for f in shp_files:
-        g, enc, tried, err = robust_read_shp(f)
-        if g is not None:
-            g["source_file"] = Path(f).stem
-            ok_gdfs.append(g)
-            read_logs.append({"file": f, "encoding": enc, "tried": tried})
-        else:
-            failed.append({"file": f, "tried": tried, "error": err})
-    return shp_files, ok_gdfs, read_logs, failed
+MAPBOX_TOKEN = "pk.eyJ1IjoiZ3VyMDUxMDgiLCJhIjoiY21lZ2k1Y291MTdoZjJrb2k3bHc3cTJrbSJ9.DElgSQ0rPoRk1eEacPI8uQ"
 
 # ──────────────────────────────
-# ✅ 데이터 로드 (DRT 라인 셰이프 자동 병합)
+# 셰이프 로딩(인라인, 인코딩 다단계 시도)
 # ──────────────────────────────
 patterns = ["./drt_*.shp", "./new_new_drt.shp"]
-shp_files, gdfs, read_logs, failed_logs = load_all_shps(patterns)
+shp_files = []
+for p in patterns:
+    shp_files.extend(glob.glob(p))
+shp_files = sorted(set(shp_files))
 
 if not shp_files:
     st.error("❌ drt_*.shp / new_new_drt.shp 파일을 찾지 못했습니다.")
     st.stop()
+
+# Fiona 드라이버 보장
+fiona.drvsupport.supported_drivers["ESRI Shapefile"] = "raw"
+
+gdfs = []
+read_logs = []
+failed_logs = []
+ENCODING_TRY_ORDER = ["utf-8", "euc-kr", "cp949", "latin1"]
+
+for f in shp_files:
+    ok = False
+    tried = []
+    enc_used = None
+    for enc in ENCODING_TRY_ORDER:
+        try:
+            _g = gpd.read_file(f, encoding=enc)
+            ok = True
+            enc_used = enc
+            break
+        except Exception as e:
+            tried.append(enc)
+            last_err = str(e)
+    if ok:
+        _g["source_file"] = Path(f).stem
+        gdfs.append(_g)
+        read_logs.append({"file": f, "encoding": enc_used, "tried": tried})
+    else:
+        failed_logs.append({"file": f, "tried": tried, "error": last_err})
 
 with st.expander("📄 셰이프 로딩 로그", expanded=False):
     if read_logs:
@@ -133,18 +112,12 @@ with st.expander("📄 셰이프 로딩 로그", expanded=False):
         st.dataframe(pd.DataFrame(failed_logs))
 
 if not gdfs:
-    st.error("❌ 모든 셰이프 파일을 읽는 데 실패했습니다. 인코딩(.cpg) 지정 또는 파일 손상 여부를 확인하세요.")
+    st.error("❌ 모든 셰이프 파일 로딩 실패. .cpg 인코딩 지정 또는 파일 손상 여부를 확인하세요.")
     st.stop()
 
-# ──────────────────────────────
-# ✅ concat으로 병합
-# ──────────────────────────────
 gdf = pd.concat(gdfs, ignore_index=True)
 gdf = gpd.GeoDataFrame(gdf, geometry="geometry", crs=gdfs[0].crs if gdfs[0].crs else "EPSG:4326")
 
-# ──────────────────────────────
-# ✅ 좌표계 EPSG:4326으로 맞추기
-# ──────────────────────────────
 try:
     if gdf.crs is None or gdf.crs.to_epsg() != 4326:
         gdf = gdf.to_crs(epsg=4326)
@@ -153,12 +126,11 @@ except Exception as e:
     gdf.set_crs(epsg=4326, inplace=True)
 
 # ──────────────────────────────
-# ✅ name 컬럼 보정
+# name/lat/lon 보정
 # ──────────────────────────────
 name_candidates = [c for c in gdf.columns if str(c).lower() in ["name", "정류장명", "stop_name", "title"]]
 if name_candidates:
-    name_col = name_candidates[0]
-    gdf["name"] = gdf[name_col].astype(str)
+    gdf["name"] = gdf[name_candidates[0]].astype(str)
 else:
     obj_cols = [c for c in gdf.columns if c != "geometry" and gdf[c].dtype == "object"]
     if obj_cols:
@@ -166,23 +138,16 @@ else:
     else:
         gdf["name"] = gdf.apply(lambda r: f"{r.get('source_file','drt')}_{int(r.name)+1}", axis=1)
 
-# ──────────────────────────────
-# ✅ 위도/경도 컬럼 생성
-# ──────────────────────────────
-try:
-    if gdf.geometry.geom_type.isin(["Point"]).all():
-        gdf["lon"] = gdf.geometry.x
-        gdf["lat"] = gdf.geometry.y
-    else:
-        reps = gdf.geometry.representative_point()
-        gdf["lon"] = reps.x
-        gdf["lat"] = reps.y
-except Exception as e:
-    st.error(f"좌표 추출 실패: {e}")
-    st.stop()
+if gdf.geometry.geom_type.isin(["Point"]).all():
+    gdf["lon"] = gdf.geometry.x
+    gdf["lat"] = gdf.geometry.y
+else:
+    reps = gdf.geometry.representative_point()
+    gdf["lon"] = reps.x
+    gdf["lat"] = reps.y
 
 # ──────────────────────────────
-# ✅ 경계(boundary) 생성
+# 경계(boundary)
 # ──────────────────────────────
 boundary_path = Path("./cb_shp.shp")
 if boundary_path.exists():
@@ -199,129 +164,69 @@ else:
         boundary = None
 
 # ──────────────────────────────
-# ✅ Session 초기화
+# 세션 초기값
 # ──────────────────────────────
-DEFAULTS = {
-    "order": [],
-    "segments": [],
-    "duration": 0.0,
-    "distance": 0.0,
-    "messages": [
-        {"role": "system", "content": "당신은 천안시에서 DRT(수요응답형 교통) 최적 노선을 추천해 주는 전문 교통 어시스턴트입니다."}
-    ],
-    "auto_gpt_input": ""
-}
-
-for k, v in DEFAULTS.items():
-    st.session_state.setdefault(k, v)
+if "order" not in st.session_state: st.session_state["order"] = []
+if "segments" not in st.session_state: st.session_state["segments"] = []
+if "duration" not in st.session_state: st.session_state["duration"] = 0.0
+if "distance" not in st.session_state: st.session_state["distance"] = 0.0
+if "messages" not in st.session_state:
+    st.session_state["messages"] = [{"role": "system", "content": "당신은 천안시에서 DRT(수요응답형 교통) 최적 노선을 추천해 주는 전문 교통 어시스턴트입니다."}]
+if "auto_gpt_input" not in st.session_state: st.session_state["auto_gpt_input"] = ""
 
 # ──────────────────────────────
-# ✅ 혼잡도 보정 함수 (차량만 영향, 도보=1.0)
-# ──────────────────────────────
-def congestion_factor(time_band: str, mode_text: str) -> float:
-    if "도보" in mode_text:
-        return 1.0
-    table = {
-        "혼잡(출퇴근)": 1.40,
-        "일반":       1.15,
-        "심야/한산":   0.90,
-    }
-    return table.get(time_band, 1.15)
-
-# ──────────────────────────────
-# ✅ 메인 레이아웃 (3컬럼)
+# 레이아웃
 # ──────────────────────────────
 col1, col2, col3 = st.columns([1.5, 1.2, 3], gap="large")
 
-# ------------------------------
-# ✅ [좌] DRT 노선 추천 설정
-# ------------------------------
 with col1:
     st.markdown('<div class="section-header">🚐 DRT 노선 추천 설정</div>', unsafe_allow_html=True)
     st.caption("출발/경유 정류장을 선택하고 노선을 추천받으세요.")
 
     st.markdown("**운행 모드**")
-    mode = st.radio(
-        "", 
-        ["차량(운행)", "도보(승객 접근)"],
-        horizontal=True, 
-        key="mode_key", 
-        label_visibility="collapsed"
-    )
+    _ = st.radio("", ["차량(운행)", "도보(승객 접근)"], horizontal=True, key="mode_key", label_visibility="collapsed")
 
     st.markdown("**출발 시각 & 시간대**")
-    dep_time = st.time_input(
-        "",
-        value=datetime.time(9, 0),
-        key="dep_time",
-        label_visibility="collapsed",
-        help="이 시각을 기준으로 각 정류장의 도착 예정 시간을 계산합니다."
-    )
-    time_band = st.selectbox(
-        "",
-        ["혼잡(출퇴근)", "일반", "심야/한산"],
-        index=1,
-        key="time_band",
-        label_visibility="collapsed",
-        help="시간대별 혼잡도를 반영해 소요시간을 보정합니다. (차량만 적용)"
-    )
+    _ = st.time_input("", value=datetime.time(9, 0), key="dep_time", label_visibility="collapsed",
+                      help="이 시각을 기준으로 각 정류장의 도착 예정 시간을 계산합니다.")
+    _ = st.selectbox("", ["혼잡(출퇴근)", "일반", "심야/한산"], index=1, key="time_band", label_visibility="collapsed",
+                     help="시간대별 혼잡도를 반영해 소요시간을 보정합니다. (차량만 적용)")
 
     st.markdown("**출발 정류장**")
     names_list = gdf["name"].dropna().astype(str).unique().tolist()
-    start = st.selectbox(
-        "",
-        names_list,
-        key="start_key",
-        label_visibility="collapsed",
-        help="DRT 운행을 시작할 정류장을 선택하세요."
-    )
+    _ = st.selectbox("", names_list, key="start_key", label_visibility="collapsed",
+                     help="DRT 운행을 시작할 정류장을 선택하세요.")
 
     st.markdown("**경유 정류장 (선택)**")
-    wps = st.multiselect(
-        "",
-        [n for n in names_list if n != st.session_state.get("start_key", "")],
-        key="wps_key",
-        label_visibility="collapsed",
-        help="중간에 들를 정류장을 선택하세요. (복수 선택 가능)"
-    )
+    _ = st.multiselect("", [n for n in names_list if n != st.session_state.get("start_key", "")],
+                       key="wps_key", label_visibility="collapsed",
+                       help="중간에 들를 정류장을 선택하세요. (복수 선택 가능)")
 
-    col_btn1, col_btn2 = st.columns(2, gap="small")
-    with col_btn1:
+    c1, c2 = st.columns(2, gap="small")
+    with c1:
         create_clicked = st.button("노선 추천")
-    with col_btn2:
+    with c2:
         clear_clicked = st.button("초기화")
 
-# ------------------------------
-# ✅ 초기화 처리
-# ------------------------------
 if clear_clicked:
     try:
-        keys_to_clear = ["segments", "order", "duration", "distance", "auto_gpt_input", "leg_durations"]
-        for k in keys_to_clear:
-            if k in st.session_state:
-                if k in ["segments", "order", "leg_durations"]:
-                    st.session_state[k] = []
-                elif k in ["duration", "distance"]:
-                    st.session_state[k] = 0.0
-                else:
-                    st.session_state[k] = ""
+        for k in ["segments", "order", "leg_durations"]:
+            st.session_state[k] = []
+        for k in ["duration", "distance"]:
+            st.session_state[k] = 0.0
+        for k in ["auto_gpt_input"]:
+            st.session_state[k] = ""
         for widget_key in ["mode_key", "start_key", "wps_key", "dep_time", "time_band"]:
-            if widget_key in st.session_state:
-                del st.session_state[widget_key]
+            if widget_key in st.session_state: del st.session_state[widget_key]
         st.success("✅ 초기화가 완료되었습니다.")
         st.rerun()
     except Exception as e:
         st.error(f"❌ 초기화 중 오류: {str(e)}")
 
-# ------------------------------
-# ✅ [중간] 방문순서 + 메트릭
-# ------------------------------
 with col2:
     st.markdown('<div class="section-header">📍 여행 방문 순서</div>', unsafe_allow_html=True)
-
-    current_order = st.session_state.get("order", [])
-    if current_order:
-        for i, name in enumerate(current_order, 1):
+    if st.session_state.get("order", []):
+        for i, name in enumerate(st.session_state["order"], 1):
             st.markdown(f"""
             <div class="visit-order-item">
                 <div class="visit-number">{i}</div>
@@ -333,24 +238,16 @@ with col2:
 
     if st.session_state.get("segments") and st.session_state.get("leg_durations"):
         try:
-            start_dt = datetime.datetime.combine(
-                datetime.date.today(),
-                st.session_state.get("dep_time", datetime.time(9, 0))
-            )
+            start_dt = datetime.datetime.combine(datetime.date.today(),
+                                                 st.session_state.get("dep_time", datetime.time(9, 0)))
             times = [start_dt]
             for dmin in st.session_state["leg_durations"]:
                 times.append(times[-1] + datetime.timedelta(minutes=float(dmin)))
-
             labels = st.session_state.get("order", [])[:]
-            if len(labels) < len(times):
-                labels = labels + [f"목적지 {len(times)-len(labels)}"]
+            if len(labels) < len(times): labels += [f"목적지 {len(times)-len(labels)}"]
             labels = labels[:len(times)]
-
             st.markdown("**🕒 도착 예정 시간표**")
-            eta_df = pd.DataFrame({
-                "정류장": labels,
-                "도착 예정 시각": [t.strftime("%H:%M") for t in times]
-            })
+            eta_df = pd.DataFrame({"정류장": labels, "도착 예정 시각": [t.strftime("%H:%M") for t in times]})
             st.dataframe(eta_df, use_container_width=True)
         except Exception as _e:
             st.warning(f"ETA 계산 중 경고: {str(_e)}")
@@ -359,15 +256,12 @@ with col2:
     st.metric("⏱️ 소요시간", f"{st.session_state.get('duration', 0.0):.1f}분")
     st.metric("📏 이동거리", f"{st.session_state.get('distance', 0.0):.2f}km")
 
-# ------------------------------
-# ✅ [우] 지도
-# ------------------------------
 with col3:
     st.markdown('<div class="section-header">🗺️ 추천경로 지도시각화</div>', unsafe_allow_html=True)
 
     try:
-        ctr = boundary.geometry.centroid if boundary is not None else None
-        if ctr is not None:
+        if boundary is not None:
+            ctr = boundary.geometry.centroid
             clat, clon = float(ctr.y.mean()), float(ctr.x.mean())
         else:
             clat, clon = float(gdf["lat"].mean()), float(gdf["lon"].mean())
@@ -377,36 +271,36 @@ with col3:
         st.warning(f"중심점 계산 오류: {str(e)}")
         clat, clon = 36.64, 127.48
 
-    @st.cache_data(show_spinner=False)
-    def load_graph(lat, lon):
+    # OSMnx 그래프 로드(인라인)
+    try:
+        G = ox.graph_from_point((clat, clon), dist=3000, network_type="all")
+    except Exception as e:
+        st.warning(f"도로 네트워크 로드 실패: {str(e)}")
         try:
-            return ox.graph_from_point((lat, lon), dist=3000, network_type="all")
-        except Exception as e:
-            st.warning(f"도로 네트워크 로드 실패: {str(e)}")
-            try:
-                return ox.graph_from_point((36.64, 127.48), dist=3000, network_type="all")
-            except:
-                return None
+            G = ox.graph_from_point((36.64, 127.48), dist=3000, network_type="all")
+        except Exception:
+            G = None
 
-    G = load_graph(clat, clon)
-    edges = None
     if G is not None:
         try:
             edges = ox.graph_to_gdfs(G, nodes=False)
         except Exception as e:
             st.warning(f"엣지 변환 실패: {str(e)}")
+            edges = None
+    else:
+        edges = None
 
+    # 스냅 포인트
     stops = [st.session_state.get("start_key", "")] + st.session_state.get("wps_key", [])
     snapped = []
     try:
         for nm in stops:
-            if not nm:
-                continue
-            matching_rows = gdf[gdf["name"] == nm]
-            if matching_rows.empty:
+            if not nm: continue
+            rows = gdf[gdf["name"] == nm]
+            if rows.empty:
                 st.warning(f"⚠️ '{nm}' 정보를 찾을 수 없습니다.")
                 continue
-            r = matching_rows.iloc[0]
+            r = rows.iloc[0]
             if pd.isna(r.lon) or pd.isna(r.lat):
                 st.warning(f"⚠️ '{nm}'의 좌표 정보가 없습니다.")
                 continue
@@ -416,7 +310,6 @@ with col3:
                 snapped.append((r.lon, r.lat))
                 continue
 
-            # 거리계산 시 CRS 차이 방지 위해 동일 좌표계로 처리
             try:
                 edges_tmp = edges.to_crs(epsg=4326)
             except Exception:
@@ -441,10 +334,8 @@ with col3:
             except Exception as coord_error:
                 st.warning(f"⚠️ '{nm}' 좌표를 가져올 수 없습니다: {str(coord_error)}")
 
-    # ───────────────────────────
-    # ✅ 경로 생성 처리
-    # ───────────────────────────
-    if st.session_state.get("mode_key") is None:
+    # 경로 생성
+    if "mode_key" not in st.session_state:
         st.session_state["mode_key"] = "차량(운행)"
 
     if create_clicked and len(snapped) >= 2:
@@ -453,20 +344,16 @@ with col3:
             leg_durs_min = []
             api_mode = "walking" if "도보" in st.session_state.get("mode_key", "") else "driving"
 
-            cong = congestion_factor(st.session_state.get("time_band", "일반"),
-                                     st.session_state.get("mode_key", "차량(운행)"))
+            # 혼잡도 보정(인라인)
+            cong_map = {"혼잡(출퇴근)": 1.40, "일반": 1.15, "심야/한산": 0.90}
+            cong = 1.0 if "도보" in st.session_state.get("mode_key","") else cong_map.get(st.session_state.get("time_band","일반"), 1.15)
 
             for i in range(len(snapped) - 1):
                 x1, y1 = snapped[i]
                 x2, y2 = snapped[i + 1]
                 coord = f"{x1},{y1};{x2},{y2}"
-
                 url = f"https://api.mapbox.com/directions/v5/mapbox/{api_mode}/{coord}"
-                params = {
-                    "geometries": "geojson",
-                    "overview": "full",
-                    "access_token": MAPBOX_TOKEN
-                }
+                params = {"geometries": "geojson", "overview": "full", "access_token": MAPBOX_TOKEN}
 
                 try:
                     r = requests.get(url, params=params, timeout=10)
@@ -476,8 +363,7 @@ with col3:
                             route = data_resp["routes"][0]
                             sec_base = float(route.get("duration", 0.0))
                             dist_m   = float(route.get("distance", 0.0))
-                            sec_adj = sec_base * (cong if api_mode == "driving" else 1.0)
-
+                            sec_adj  = sec_base * (cong if api_mode == "driving" else 1.0)
                             segs.append(route["geometry"]["coordinates"])
                             total_sec   += sec_adj
                             total_meter += dist_m
@@ -498,29 +384,18 @@ with col3:
                 st.session_state["distance"] = total_meter / 1000.0
                 st.session_state["leg_durations"] = leg_durs_min
 
-                st.success(
-                    f"✅ 경로가 성공적으로 생성되었습니다! · 총 {st.session_state['distance']:.2f} km · "
-                    f"약 {st.session_state['duration']:.1f} 분 (시간대 보정계수 x{cong:.2f})"
-                )
+                st.success(f"✅ 경로가 성공적으로 생성되었습니다! · 총 {st.session_state['distance']:.2f} km · 약 {st.session_state['duration']:.1f} 분 (시간대 보정계수 x{cong:.2f})")
 
                 try:
-                    start_dt = datetime.datetime.combine(
-                        datetime.date.today(),
-                        st.session_state.get("dep_time", datetime.time(9, 0))
-                    )
+                    start_dt = datetime.datetime.combine(datetime.date.today(),
+                                                         st.session_state.get("dep_time", datetime.time(9, 0)))
                     times = [start_dt]
                     for dmin in leg_durs_min:
                         times.append(times[-1] + datetime.timedelta(minutes=float(dmin)))
-
                     labels = st.session_state["order"][:]
-                    if len(labels) < len(times):
-                        labels = labels + [f"목적지 {len(times)-len(labels)}"]
+                    if len(labels) < len(times): labels += [f"목적지 {len(times)-len(labels)}"]
                     labels = labels[:len(times)]
-
-                    sched_df = pd.DataFrame({
-                        "정류장": labels,
-                        "도착 예정 시각": [t.strftime("%H:%M") for t in times]
-                    })
+                    sched_df = pd.DataFrame({"정류장": labels, "도착 예정 시각": [t.strftime("%H:%M") for t in times]})
                     st.dataframe(sched_df, use_container_width=True)
                 except Exception as _e:
                     st.warning(f"ETA 표 생성 중 경고: {str(_e)}")
@@ -532,103 +407,61 @@ with col3:
 
     # 지도 렌더링
     try:
-        m = folium.Map(
-            location=[clat, clon],
-            zoom_start=12,
-            tiles="CartoDB Positron",
-            prefer_canvas=True,
-            control_scale=True
-        )
+        m = folium.Map(location=[clat, clon], zoom_start=12, tiles="CartoDB Positron",
+                       prefer_canvas=True, control_scale=True)
 
         if boundary is not None:
             folium.GeoJson(boundary, style_function=lambda f: {
-                "color": "#9aa0a6",
-                "weight": 2,
-                "dashArray": "4,4",
-                "fillOpacity": 0.05
+                "color": "#9aa0a6", "weight": 2, "dashArray": "4,4", "fillOpacity": 0.05
             }).add_to(m)
 
         mc = MarkerCluster().add_to(m)
         for _, row in gdf.iterrows():
             if not (pd.isna(row.lat) or pd.isna(row.lon)):
-                folium.Marker(
-                    [row.lat, row.lon],
-                    popup=folium.Popup(str(row["name"]), max_width=200),
-                    tooltip=str(row["name"]),
-                    icon=folium.Icon(color="gray")
-                ).add_to(mc)
+                folium.Marker([row.lat, row.lon],
+                              popup=folium.Popup(str(row["name"]), max_width=200),
+                              tooltip=str(row["name"]),
+                              icon=folium.Icon(color="gray")).add_to(mc)
 
         current_order = st.session_state.get("order", stops)
         for idx, (x, y) in enumerate(snapped, 1):
             place_name = current_order[idx - 1] if idx <= len(current_order) else f"지점 {idx}"
-            folium.Marker(
-                [y, x],
-                icon=folium.Icon(color="red", icon="flag"),
-                tooltip=f"{idx}. {place_name}",
-                popup=folium.Popup(f"<b>{idx}. {place_name}</b>", max_width=200)
-            ).add_to(m)
+            folium.Marker([y, x],
+                          icon=folium.Icon(color="red", icon="flag"),
+                          tooltip=f"{idx}. {place_name}",
+                          popup=folium.Popup(f"<b>{idx}. {place_name}</b>", max_width=200)
+                          ).add_to(m)
 
         if st.session_state.get("segments"):
             palette = ["#4285f4", "#34a853", "#ea4335", "#fbbc04", "#9c27b0", "#ff9800"]
             segments = st.session_state["segments"]
-            used_positions = []
-            min_distance = 0.001
-
+            used_positions, min_distance = [], 0.001
             for i, seg in enumerate(segments):
                 if seg:
-                    folium.PolyLine(
-                        [(pt[1], pt[0]) for pt in seg],
-                        color=palette[i % len(palette)],
-                        weight=5,
-                        opacity=0.8
-                    ).add_to(m)
-
+                    folium.PolyLine([(pt[1], pt[0]) for pt in seg],
+                                    color=palette[i % len(palette)], weight=5, opacity=0.8).add_to(m)
                     mid = seg[len(seg) // 2]
                     candidate_pos = [mid[1], mid[0]]
-                    while any(
-                        abs(candidate_pos[0] - used[0]) < min_distance and
-                        abs(candidate_pos[1] - used[1]) < min_distance
-                        for used in used_positions
-                    ):
+                    while any(abs(candidate_pos[0]-u[0]) < min_distance and abs(candidate_pos[1]-u[1]) < min_distance for u in used_positions):
                         candidate_pos[0] += min_distance * 0.5
                         candidate_pos[1] += min_distance * 0.5
-
-                    folium.map.Marker(
-                        candidate_pos,
-                        icon=DivIcon(html=f"<div style='background:{palette[i % len(palette)]};"
-                                          "color:#fff;border-radius:50%;width:28px;height:28px;"
-                                          "line-height:28px;text-align:center;font-weight:600;"
-                                          "box-shadow:0 2px 4px rgba(0,0,0,0.3);'>"
-                                          f"{i+1}</div>")
-                    ).add_to(m)
+                    folium.map.Marker(candidate_pos,
+                                      icon=DivIcon(html=f"<div style='background:{palette[i % len(palette)]};color:#fff;border-radius:50%;width:28px;height:28px;line-height:28px;text-align:center;font-weight:600;box-shadow:0 2px 4px rgba(0,0,0,0.3);'>{i+1}</div>")
+                                      ).add_to(m)
                     used_positions.append(candidate_pos)
-
             try:
                 pts = [pt for seg in segments for pt in seg if seg]
                 if pts:
                     m.fit_bounds([[min(p[1] for p in pts), min(p[0] for p in pts)],
                                   [max(p[1] for p in pts), max(p[0] for p in pts)]])
             except:
-                m.location = [clat, clon]
-                m.zoom_start = 12
+                m.location = [clat, clon]; m.zoom_start = 12
         else:
-            m.location = [clat, clon]
-            m.zoom_start = 12
+            m.location = [clat, clon]; m.zoom_start = 12
 
         st.markdown('<div class="map-container">', unsafe_allow_html=True)
-        _ = st_folium(
-            m,
-            width="100%",
-            height=520,
-            returned_objects=[],
-            use_container_width=True,
-            key="main_map"
-        )
+        _ = st_folium(m, width="100%", height=520, returned_objects=[], use_container_width=True, key="main_map")
         st.markdown('</div>', unsafe_allow_html=True)
-
     except Exception as map_error:
         st.error(f"❌ 지도 렌더링 오류: {str(map_error)}")
-        st.markdown(
-            '<div class="map-container" style="display: flex; align-items: center; justify-content: center; color: #6b7280;">지도를 불러올 수 없습니다.</div>',
-            unsafe_allow_html=True
-        )
+        st.markdown('<div class="map-container" style="display:flex;align-items:center;justify-content:center;color:#6b7280;">지도를 불러올 수 없습니다.</div>', unsafe_allow_html=True)
