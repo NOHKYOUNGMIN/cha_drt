@@ -20,58 +20,94 @@ MAPBOX_TOKEN = "pk.eyJ1IjoiZ3VyMDUxMDgiLCJhIjoiY21lZ2k1Y291MTdoZjJrb2k3bHc3cTJrb
 # ──────────────────────────────
 # ✅ 데이터 로드 (안전한 로드)
 # ──────────────────────────────
+# ──────────────────────────────
+# ✅ 데이터 로드 (DRT 라인 셰이프 자동 병합)
+# ──────────────────────────────
 @st.cache_data
 def load_data():
+    import glob
+    from pathlib import Path
     try:
-        gdf = gpd.read_file("./cb_tour.shp").to_crs(epsg=4326)
-        gdf["lon"], gdf["lat"] = gdf.geometry.x, gdf.geometry.y
-        boundary = gpd.read_file("./cb_shp.shp").to_crs(epsg=4326)
+        # 1) 대상 shp 자동 탐색 (작업 폴더 기준)
+        #    drt_1.shp ~ drt_4.shp, new_drt.shp
+        patterns = ["./drt_*.shp", "./new_drt.shp"]
+        shp_files = []
+        for p in patterns:
+            shp_files.extend(glob.glob(p))
+        shp_files = sorted(set(shp_files))
+
+        if not shp_files:
+            raise FileNotFoundError("drt_*.shp / new_drt.shp 를 찾지 못했습니다.")
+
+        # 2) 모두 읽어서 하나로 병합
+        gdfs = []
+        for f in shp_files:
+            _g = gpd.read_file(f)
+            # 출처 파일명 보존(나중에 name 자동 생성에 사용)
+            _g["source_file"] = Path(f).stem
+            gdfs.append(_g)
+
+        gdf = pd.concat(gdfs, ignore_index=True)
+        # GeoDataFrame 보장
+        gdf = gpd.GeoDataFrame(gdf, geometry="geometry", crs=gdfs[0].crs)
+
+        # 3) 좌표계 통일 → EPSG:4326
+        if gdf.crs is None or gdf.crs.to_epsg() != 4326:
+            gdf = gdf.to_crs(epsg=4326)
+
+        # 4) name 컬럼 보정(없으면 생성)
+        name_candidates = [c for c in gdf.columns if c.lower() in ["name", "정류장명", "stop_name", "title"]]
+        if name_candidates:
+            name_col = name_candidates[0]
+            gdf["name"] = gdf[name_col].astype(str)
+        else:
+            # 문자열형 첫 컬럼 시도
+            obj_cols = [c for c in gdf.columns if c != "geometry" and gdf[c].dtype == "object"]
+            if obj_cols:
+                gdf["name"] = gdf[obj_cols[0]].astype(str)
+            else:
+                # 완전 없으면 파일명+인덱스로 생성
+                gdf["name"] = gdf.apply(
+                    lambda r: f"{r.get('source_file','drt')}_{int(r.name)+1}", axis=1
+                )
+
+        # 5) lon/lat 생성
+        #    - Point면 그대로 x/y
+        #    - 그 외(Line/Polygon)는 representative_point로 대체
+        if gdf.geometry.geom_type.isin(["Point"]).all():
+            gdf["lon"] = gdf.geometry.x
+            gdf["lat"] = gdf.geometry.y
+        else:
+            reps = gdf.geometry.representative_point()
+            gdf["lon"] = reps.x
+            gdf["lat"] = reps.y
+
+        # 6) boundary 생성
+        #    - 기존 cb_shp.shp 있으면 사용, 없으면 데이터의 convex hull
+        boundary_path = Path("./cb_shp.shp")
+        if boundary_path.exists():
+            boundary = gpd.read_file(boundary_path).to_crs(epsg=4326)
+        else:
+            try:
+                union = gdf.unary_union
+                hull = union.convex_hull
+                boundary = gpd.GeoDataFrame(geometry=[hull], crs="EPSG:4326")
+            except Exception:
+                boundary = None
+
         return gdf, boundary
+
     except Exception as e:
         st.error(f"❌ 데이터 로드 실패: {str(e)}")
-        return None, None, None
+        return None, None
 
+# ↓ 그대로 유지
 gdf, boundary = load_data()
 
 # 데이터 로드 실패 시 앱 중단
 if gdf is None:
     st.stop()
 
-# csv 파일에 카페 있을때 출력 / 카페 포맷 함수
-def format_cafes(cafes_df):
-    try:
-        cafes_df = cafes_df.drop_duplicates(subset=['c_name', 'c_value', 'c_review'])
-        result = []
-        
-        if len(cafes_df) == 0:
-            return ("현재 이 관광지 주변에 등록된 카페 정보는 없어요. \n"
-                   "하지만 근처에 숨겨진 보석 같은 공간이 있을 수 있으니, \n"
-                   "지도를 활용해 천천히 걸어보시는 것도 추천드립니다 😊")
-        elif len(cafes_df) == 1:
-            row = cafes_df.iloc[0]
-            if all(x not in str(row["c_review"]) for x in ["없음", "없읍"]):
-                return f" **{row['c_name']}** (⭐ {row['c_value']}) \n\"{row['c_review']}\""
-            else:
-                return f"**{row['c_name']}** (⭐ {row['c_value']})"
-        else:
-            grouped = cafes_df.groupby(['c_name', 'c_value'])
-            result.append("**주변의 평점 높은 카페들은 여기 있어요!** 🌼\n")
-            
-            for (name, value), group in grouped:
-                reviews = group['c_review'].dropna().unique()
-                reviews = [r for r in reviews if all(x not in str(r) for x in ["없음", "없읍"])]
-                top_reviews = reviews[:3]
-                
-                if top_reviews:
-                    review_text = "\n".join([f"\"{r}\"" for r in top_reviews])
-                    result.append(f"- **{name}** (⭐ {value}) \n{review_text}")
-                else:
-                    result.append(f"- **{name}** (⭐ {value})")
-            
-            return "\n\n".join(result)
-            
-    except Exception as e:
-        return f"카페 정보 처리 중 오류가 발생했습니다: {str(e)}"
 
 # ──────────────────────────────
 # ✅ Session 초기화
