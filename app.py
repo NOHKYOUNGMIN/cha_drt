@@ -30,17 +30,37 @@ for p in patterns:
 shp_files = sorted(set(shp_files))
 
 if not shp_files:
-    raise FileNotFoundError("❌ drt_*.shp / new_new_drt.shp 파일을 찾지 못했습니다.")
+    raise FileNotFoundError("❌ drt_*.shp / new_drt.shp 파일을 찾지 못했습니다.")
 
 # ──────────────────────────────
-# ✅ 2. 파일별 읽기 + source_file 컬럼 추가
+# ✅ 2. 파일별 읽기 + source_file 컬럼 추가 (인코딩 자동 감지/재시도)
 # ──────────────────────────────
 gdfs = []
 for f in shp_files:
     print("불러오는 중:", f)
-    _g = gpd.read_file(f, encoding="euc-kr")
-    _g["source_file"] = Path(f).stem
-    gdfs.append(_g)
+    gdf_loaded = None
+    enc_candidates = ["utf-8", "euc-kr", "cp949", None]
+
+    last_err = None
+    for enc in enc_candidates:
+        try:
+            if enc is None:
+                _g = gpd.read_file(f)  # encoding 인자를 주지 않음
+                print(f"  ✅ 성공: encoding=None")
+            else:
+                _g = gpd.read_file(f, encoding=enc)
+                print(f"  ✅ 성공: encoding='{enc}'")
+            gdf_loaded = _g
+            break
+        except Exception as e:
+            print(f"  ❌ 실패: encoding='{enc}' | {e}")
+            last_err = e
+
+    if gdf_loaded is None:
+        raise RuntimeError(f"❌ 인코딩 자동 감지 실패: {f}\n마지막 오류: {last_err}")
+
+    gdf_loaded["source_file"] = Path(f).stem
+    gdfs.append(gdf_loaded)
 
 # ──────────────────────────────
 # ✅ 3. concat으로 병합
@@ -57,13 +77,13 @@ if gdf.crs is None or gdf.crs.to_epsg() != 4326:
 # ──────────────────────────────
 # ✅ 5. name 컬럼 보정
 # ──────────────────────────────
-name_candidates = [c for c in gdf.columns if c.lower() in ["name", "정류장명", "stop_name", "title"]]
-if name_candidates:
+name_candidates = [c for c in gdf.columns if str(c).lower() in ["name", "정류장명", "stop_name", "title"]]
+if len(name_candidates) > 0:
     name_col = name_candidates[0]
     gdf["name"] = gdf[name_col].astype(str)
 else:
     obj_cols = [c for c in gdf.columns if c != "geometry" and gdf[c].dtype == "object"]
-    if obj_cols:
+    if len(obj_cols) > 0:
         gdf["name"] = gdf[obj_cols[0]].astype(str)
     else:
         gdf["name"] = gdf.apply(lambda r: f"{r.get('source_file','drt')}_{int(r.name)+1}", axis=1)
@@ -78,21 +98,6 @@ else:
     reps = gdf.geometry.representative_point()
     gdf["lon"] = reps.x
     gdf["lat"] = reps.y
-
-# ──────────────────────────────
-# ✅ 7. boundary 생성
-# ──────────────────────────────
-boundary_path = Path("./cb_shp.shp")
-if boundary_path.exists():
-    boundary = gpd.read_file(boundary_path, encoding="euc-kr").to_crs(epsg=4326)
-else:
-    try:
-        union = gdf.unary_union
-        hull = union.convex_hull
-        boundary = gpd.GeoDataFrame(geometry=[hull], crs="EPSG:4326")
-    except Exception:
-        boundary = None
-
 
 # ──────────────────────────────
 # ✅ Session 초기화
