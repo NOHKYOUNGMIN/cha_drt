@@ -457,25 +457,53 @@ st.markdown('''
 col1, col2, col3 = st.columns([1.5, 1.2, 3], gap="large")
 
 # ------------------------------
-# ✅ [좌] 경로 설정
+# ✅ [좌] DRT 노선 추천 설정 (라벨만 개선)
 # ------------------------------
 with col1:
-    st.markdown('<div class="section-header">🚗 추천경로 설정</div>', unsafe_allow_html=True)
-    
-    st.markdown("**이동 모드**")
-    mode = st.radio("", ["운전자", "도보"], horizontal=True, key="mode_key", label_visibility="collapsed")
-    
-    st.markdown("**출발지**")
-    start = st.selectbox("", gdf["name"].dropna().unique(), key="start_key", label_visibility="collapsed")
-    
-    st.markdown("**경유지**")
-    wps = st.multiselect("", [n for n in gdf["name"].dropna().unique() if n != st.session_state.get("start_key", "")], key="wps_key", label_visibility="collapsed")
-    
+    st.markdown('<div class="section-header">🚐 DRT 노선 추천 설정</div>', unsafe_allow_html=True)
+
+    # 안내 문구(선택)
+    st.caption("출발/경유 정류장을 선택하고 노선을 추천받으세요.")
+
+    # ─ 이동 모드(용어만 변경)
+    st.markdown("**운행 모드**")
+    mode = st.radio(
+        "", 
+        ["차량(운행)", "도보(승객 접근)"],   # ← 문구만 변경
+        horizontal=True, 
+        key="mode_key", 
+        label_visibility="collapsed"
+    )
+
+    # ─ 출발 정류장
+    st.markdown("**출발 정류장**")
+    names_list = gdf["name"].dropna().astype(str).unique().tolist()
+    start = st.selectbox(
+        "",
+        names_list,
+        key="start_key",
+        label_visibility="collapsed",
+        help="DRT 운행을 시작할 정류장을 선택하세요."
+    )
+
+    # ─ 경유 정류장 (선택)
+    st.markdown("**경유 정류장 (선택)**")
+    wps = st.multiselect(
+        "",
+        [n for n in names_list if n != st.session_state.get("start_key", "")],
+        key="wps_key",
+        label_visibility="collapsed",
+        help="중간에 들를 정류장을 선택하세요. (복수 선택 가능)"
+    )
+
+    # ─ 버튼
     col_btn1, col_btn2 = st.columns(2, gap="small")
     with col_btn1:
-        create_clicked = st.button("경로 생성")
+        # 기존 변수명/키 유지 (다른 로직과 호환)
+        create_clicked = st.button("노선 추천")   # ← '경로 생성' → '노선 추천'
     with col_btn2:
         clear_clicked = st.button("초기화")
+
 
 # ------------------------------
 # ✅ 초기화 처리 개선
