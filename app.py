@@ -117,13 +117,14 @@ DEFAULTS = {
     "segments": [],
     "duration": 0.0,
     "distance": 0.0,
-    "messages": [{"role": "system", "content": "당신은 청주 문화관광 전문 가이드입니다."}],
+    "messages": [
+        {
+            "role": "system",
+            "content": "당신은 천안시에서 DRT(수요응답형 교통) 최적 노선을 추천해 주는 전문 교통 어시스턴트입니다."
+        }
+    ],
     "auto_gpt_input": ""
 }
-
-for k, v in DEFAULTS.items():
-    if k not in st.session_state:
-        st.session_state[k] = v
 
 # ──────────────────────────────
 # ✅ 페이지 설정 & 스타일
